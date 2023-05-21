@@ -1,3 +1,7 @@
 .vscode/
 *.pdf
-
+__pycache__
+log_dir/
+ckpt/
+results/
+out/

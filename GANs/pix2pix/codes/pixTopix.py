@@ -1,23 +1,26 @@
 from typing import Any
 import pytorch_lightning as pl
-from pytorch_lightning.utilities.types import EVAL_DATALOADERS, STEP_OUTPUT
+from pytorch_lightning.utilities.types import EVAL_DATALOADERS
+# from pytorch_lightning.utilities.types import EVAL_DATALOADERS, STEP_OUTPUT
 import torch
 import torchvision
 import torch.nn as nn
 import torch.optim as optim
-from gen_model import Generator
-from disc_model import Discriminator
+from codes.gen_model import Generator
+from codes.disc_model import Discriminator
+from torchvision.utils import save_image
 
 
 class pixToPix(pl.LightningModule):
     def __init__(
-        self, bs=8, lr=2e-4, in_channels=3, l1_lambda=100, lambda_gp=10, betas=(0.5, 0.999),
+        self, test_dl, bs=8, lr=2e-4, in_channels=3, l1_lambda=100, lambda_gp=10, betas=(0.5, 0.999),
     ) -> None:
 
         super().__init__()
         self.save_hyperparameters()
         self.automatic_optimization = False
 
+        self.test_dl = test_dl
         self.bs = bs
         self.lr = lr
         self.in_channels = in_channels
@@ -68,21 +71,57 @@ class pixToPix(pl.LightningModule):
         opt_gen.step()
 
         # Logging Things
-        if self.global_step % 10 == 0:
-            x_grid = torchvision.utils.make_grid(x, nrow=2, normalize=True)
-            y_grid = torchvision.utils.make_grid(y, nrow=2, normalize=True)
+        if batch_idx % 8 == 0:
+            # x_grid = torchvision.utils.make_grid(x, normalize=True)
+            # y_grid = torchvision.utils.make_grid(y, normalize=True)
             y_fake_grid = torchvision.utils.make_grid(
-                y_fake, nrow=2, normalize=True)
+                y_fake, normalize=True)
 
-            self.experiment.add_image(
-                "FNAC_real_images", x_grid, global_step=self.global_step)
-            self.experiment.add_image(
-                "FNAC_segmentation_masks", y_grid, global_step=self.global_step)
-            self.experiment.add_image(
-                "FNAC_fake_images", y_fake_grid, global_step=self.global_step)
+            # self.logger.experiment.add_image(
+            #     "real_images", x_grid, global_step=self.global_step)
+            # self.logger.experiment.add_image(
+            #     "segmentation_masks", y_grid, global_step=self.global_step)
+            self.logger.experiment.add_image(
+                "fake_training_images", y_fake_grid, global_step=self.current_epoch)
 
         log_dict = {"D_Loss": D_loss, "G_Loss": G_loss}
         self.log_dict(log_dict, prog_bar=True, on_epoch=True)
+
+    def validation_step(self, batch, batch_idx):
+        with torch.no_grad():
+            x, y = batch
+            y_fake = self.gen(x)
+
+            D_loss = self.discLoss(x, y, y_fake)
+            G_loss = self.genLoss(x, y, y_fake)
+
+        if batch_idx % 2 == 0:
+            # x_grid = torchvision.utils.make_grid(x, normalize=True)
+            # y_grid = torchvision.utils.make_grid(y, normalize=True)
+            y_fake_grid = torchvision.utils.make_grid(
+                y_fake, normalize=True)
+
+            # self.logger.experiment.add_image(
+            #     "real_images", x_grid, global_step=self.global_step)
+            # self.logger.experiment.add_image(
+            #     "segmentation_masks", y_grid, global_step=self.global_step)
+            self.logger.experiment.add_image(
+                "fake_val_images", y_fake_grid, global_step=self.current_epoch)
+
+        log_dict = {"val_D_Loss": D_loss, "val_G_Loss": G_loss}
+        self.log_dict(log_dict, prog_bar=True, on_epoch=True)
+
+    def on_validation_epoch_end(self):
+        for batch_idx, (x, _) in enumerate(self.test_dl):
+            y_fake = self.gen(x)
+
+            if batch_idx == 0:
+                y_fake_grid = torchvision.utils.make_grid(
+                    y_fake, normalize=True)
+                self.logger.experiment.add_image(
+                    "fake_test_images", y_fake_grid, global_step=self.current_epoch)
+
+        save_image(y_fake, f"out/epoch_{self.current_epoch}.jpg")
 
     def configure_optimizers(self):
         opt_disc = optim.Adam(params=self.disc.parameters(),
